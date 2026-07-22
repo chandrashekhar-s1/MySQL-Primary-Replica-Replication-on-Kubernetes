@@ -1,0 +1,102 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mysql
+  namespace: mysql
+
+spec:
+  serviceName: mysql
+  replicas: 2
+
+  selector:
+    matchLabels:
+      app: mysql
+
+  template:
+    metadata:
+      labels:
+        app: mysql
+
+    spec:
+
+      # Select correct MySQL configuration
+      # mysql-0 -> Primary
+      # mysql-1 -> Replica
+      initContainers:
+        - name: configure-mysql
+          image: busybox:1.36
+
+          command:
+            - sh
+            - -c
+            - |
+              if [ "$(hostname)" = "mysql-0" ]; then
+                echo "Configuring PRIMARY"
+                cp /primary/mysql.cnf /config/mysql.cnf
+              else
+                echo "Configuring REPLICA"
+                cp /replica/mysql.cnf /config/mysql.cnf
+              fi
+
+          volumeMounts:
+            - name: primary-config
+              mountPath: /primary
+
+            - name: replica-config
+              mountPath: /replica
+
+            - name: mysql-config
+              mountPath: /config
+
+      containers:
+        - name: mysql
+          image: mysql:8.0
+
+          ports:
+            - name: mysql
+              containerPort: 3306
+
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: MYSQL_ROOT_PASSWORD
+
+          volumeMounts:
+            # MySQL data
+            - name: mysql-data
+              mountPath: /var/lib/mysql
+
+            # MySQL configuration
+            - name: mysql-config
+              mountPath: /etc/mysql/conf.d
+
+      volumes:
+
+        # Primary configuration
+        - name: primary-config
+          configMap:
+            name: mysql-primary-config
+
+        # Replica configuration
+        - name: replica-config
+          configMap:
+            name: mysql-replica-config
+
+        # Generated configuration
+        - name: mysql-config
+          emptyDir: {}
+
+  # Persistent storage
+  volumeClaimTemplates:
+    - metadata:
+        name: mysql-data
+
+      spec:
+        accessModes:
+          - ReadWriteOnce
+
+        resources:
+          requests:
+            storage: 5Gi
